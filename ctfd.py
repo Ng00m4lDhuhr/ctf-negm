@@ -1,7 +1,26 @@
 import os
 import requests
+import yaml  # Make sure to install pyyaml: pip install pyyaml
 from urllib.parse import urljoin
-import json
+from datetime import datetime
+
+
+def create_ctfd_config(base_url, ctf_dir):
+    """Create a .ctfd.yaml configuration file in the root directory"""
+    config = {
+        'platform': 'CTFd',
+        'url': base_url,
+        'created_at': datetime.now().isoformat(),
+        'version': 1  # Config version for future compatibility
+    }
+    
+    config_path = os.path.join(ctf_dir, '.ctfd.yaml')
+    try:
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, sort_keys=False)
+        print(f"Created CTFd config file: {config_path}")
+    except Exception as e:
+        print(f"Warning: Could not create config file: {e}")
 
 
 def ensure_directory_exists(path):
@@ -181,6 +200,9 @@ def create_ctf_directory_structure(base_url, api_token, ctf_dir):
         # Verify we can create and write to the directory
         if not ensure_directory_exists(ctf_dir):
             raise Exception(f"Cannot create or write to directory: {ctf_dir}")
+        
+        # Create CTFd config file
+        create_ctfd_config(base_url, ctf_dir)
         
         # Fetch and process challenges
         print("Fetching challenges...")
