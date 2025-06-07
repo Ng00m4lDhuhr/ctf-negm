@@ -1,33 +1,71 @@
 import os
 import requests
-import yaml  # Make sure to install pyyaml: pip install pyyaml
+import yaml
 from urllib.parse import urljoin
 from datetime import datetime
+import argparse
 
 
-def create_ctfd_config(base_url, ctf_dir):
-    """Create a .ctfd.yaml configuration file in the root directory"""
-    config = {
-        'platform': 'CTFd',
-        'url': base_url,
-        'created_at': datetime.now().isoformat(),
-        'version': 1  # Config version for future compatibility
-    }
-    
-    config_path = os.path.join(ctf_dir, '.ctfd.yaml')
-    try:
-        with open(config_path, 'w') as f:
-            yaml.dump(config, f, sort_keys=False)
-        print(f"Created CTFd config file: {config_path}")
-    except Exception as e:
-        print(f"Warning: Could not create config file: {e}")
+class CTFdConfig:
+    @staticmethod
+    def load_config(ctf_dir):
+        config_path = os.path.join(ctf_dir, '.ctfd.yaml')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                    if config.get('platform') == 'CTFd':
+                        return config
+                    print("Warning: Config file exists but is not a valid CTFd config")
+            except Exception as e:
+                print(f"Warning: Could not read config file: {e}")
+        return None
+
+    @staticmethod
+    def create_config(base_url, ctf_dir):
+        config = {
+            'platform': 'CTFd',
+            'url': base_url,
+            'created_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat(),
+            'version': 1
+        }
+        
+        config_path = os.path.join(ctf_dir, '.ctfd.yaml')
+        try:
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, sort_keys=False)
+            print(f"Created CTFd config file: {config_path}")
+            return config
+        except Exception as e:
+            print(f"Warning: Could not create config file: {e}")
+            return None
+
+    @staticmethod
+    def update_config(ctf_dir, new_data):
+        config_path = os.path.join(ctf_dir, '.ctfd.yaml')
+        try:
+            # Read existing config
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f) or {}
+            
+            # Update with new data
+            config.update(new_data)
+            config['updated_at'] = datetime.now().isoformat()
+            
+            # Write back
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, sort_keys=False)
+            return True
+        except Exception as e:
+            print(f"Warning: Could not update config file: {e}")
+            return False
 
 
 def ensure_directory_exists(path):
     """Ensure directory exists, create if it doesn't, and verify write permissions"""
     try:
         os.makedirs(path, exist_ok=True)
-        # Verify we can write to the directory by creating a test file
         test_file = os.path.join(path, '.permission_test')
         with open(test_file, 'w') as f:
             f.write('test')
@@ -76,30 +114,21 @@ def download_challenge_files(base_url, api_token, challenge_id, download_dir):
         "Authorization": f"Token {api_token}",
     }
     
-    # First check if there are any files in the challenge details
     details = fetch_challenge_details(base_url, api_token, challenge_id)
     if not details or not details.get('files'):
-        return False
-        
-    files = details['files']
-    if not files:
         return False
         
     if not ensure_directory_exists(download_dir):
         return False
     
     downloaded_files = []
-    
-    for file_url in files:
+    for file_url in details['files']:
         try:
-            # Handle relative URLs
             if not file_url.startswith('http'):
                 file_url = urljoin(base_url, file_url)
             
-            file_name = os.path.basename(file_url.split('?')[0])  # Remove query params
+            file_name = os.path.basename(file_url.split('?')[0])
             file_path = os.path.join(download_dir, file_name)
-            
-            print(f"Attempting to download {file_url} to {file_path}")
             
             with requests.get(file_url, headers=headers, stream=True) as r:
                 r.raise_for_status()
@@ -108,11 +137,8 @@ def download_challenge_files(base_url, api_token, challenge_id, download_dir):
                         if chunk:
                             f.write(chunk)
             downloaded_files.append(file_name)
-            print(f"Successfully downloaded: {file_name}")
-            
         except requests.exceptions.RequestException as e:
             print(f"Warning: Failed to download file {file_url}: {e}")
-            continue
             
     return bool(downloaded_files)
 
@@ -124,7 +150,7 @@ def organize_challenges_by_category(challenges):
         category = challenge.get('category')
         name = challenge.get('name')
         challenge_id = challenge.get('id')
-        if not category or not name or not challenge_id:
+        if not all([category, name, challenge_id]):
             continue
 
         if category not in categories:
@@ -145,14 +171,9 @@ def create_challenge_directories(root_dir, categories, base_url, api_token):
             if not ensure_directory_exists(challenge_dir):
                 continue
             
-            # Create README.md with challenge description
             create_readme(challenge_dir, base_url, api_token, challenge_id, name)
-            
-            # Download challenge files
             if not download_challenge_files(base_url, api_token, challenge_id, challenge_dir):
                 print(f"No files downloaded for challenge {name} (ID: {challenge_id})")
-            
-            print(f"Created: {challenge_dir}")
 
 
 def create_readme(challenge_dir, base_url, api_token, challenge_id, challenge_name):
@@ -162,25 +183,18 @@ def create_readme(challenge_dir, base_url, api_token, challenge_id, challenge_na
         if not details:
             return
             
-        description = details.get('description', 'No description provided')
-        readme_path = os.path.join(challenge_dir, "README.md")
-        
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(f"# {challenge_name}\n\n")
-            f.write(f"{description}\n\n")
+        with open(os.path.join(challenge_dir, "README.md"), 'w', encoding='utf-8') as f:
+            f.write(f"# {challenge_name}\n\n{details.get('description', 'No description provided')}\n\n")
             f.write("## Challenge Details\n")
             f.write(f"- ID: {challenge_id}\n")
             f.write(f"- Category: {details.get('category', 'N/A')}\n")
             f.write(f"- Value: {details.get('value', 'N/A')} points\n")
-            if 'tags' in details and details['tags']:
+            if details.get('tags'):
                 f.write(f"- Tags: {', '.join(tag['value'] for tag in details['tags'])}\n")
-            
-            # List files if they exist
             if details.get('files'):
                 f.write("\n## Files\n")
                 for file_url in details['files']:
-                    file_name = os.path.basename(file_url.split('?')[0])
-                    f.write(f"- `{file_name}`\n")
+                    f.write(f"- `{os.path.basename(file_url.split('?')[0])}`\n")
     except Exception as e:
         print(f"Warning: Could not create README for {challenge_name}: {e}")
 
@@ -191,56 +205,56 @@ def sanitize_name(name):
                  for c in name).strip().replace(" ", "_")
 
 
-def create_ctf_directory_structure(base_url, api_token, ctf_dir):
-    """Main function to create CTF directory structure"""
-    try:
-        print(f"Starting CTF directory creation at {ctf_dir}")
-        print(f"Using API endpoint: {base_url}")
-        
-        # Verify we can create and write to the directory
-        if not ensure_directory_exists(ctf_dir):
-            raise Exception(f"Cannot create or write to directory: {ctf_dir}")
-        
-        # Create CTFd config file
-        create_ctfd_config(base_url, ctf_dir)
-        
-        # Fetch and process challenges
-        print("Fetching challenges...")
-        challenges = fetch_challenges(base_url, api_token)
-        if not challenges:
-            print("No challenges found in the CTF!")
-            return
+def run_from_config(ctf_dir, api_token):
+    """Run using existing config file"""
+    config = CTFdConfig.load_config(ctf_dir)
+    if not config:
+        raise Exception("No valid CTFd config found")
+    
+    print(f"Using CTFd instance: {config['url']}")
+    challenges = fetch_challenges(config['url'], api_token)
+    if not challenges:
+        print("No challenges found!")
+        return
+    
+    categories = organize_challenges_by_category(challenges)
+    create_challenge_directories(ctf_dir, categories, config['url'], api_token)
+    CTFdConfig.update_config(ctf_dir, {'last_sync': datetime.now().isoformat()})
 
-        print(f"Found {len(challenges)} challenges")
-        categories = organize_challenges_by_category(challenges)
-        print(f"Organized into {len(categories)} categories")
 
-        # Create directory structure
-        create_challenge_directories(ctf_dir, categories, base_url, api_token)
-
-        print(f"\nSuccessfully created directory structure at: {os.path.abspath(ctf_dir)}")
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
+def run_with_new_config(base_url, api_token, ctf_dir):
+    """Run with new configuration"""
+    if not ensure_directory_exists(ctf_dir):
+        raise Exception(f"Cannot create or write to directory: {ctf_dir}")
+    
+    CTFdConfig.create_config(base_url, ctf_dir)
+    challenges = fetch_challenges(base_url, api_token)
+    if not challenges:
+        print("No challenges found!")
+        return
+    
+    categories = organize_challenges_by_category(challenges)
+    create_challenge_directories(ctf_dir, categories, base_url, api_token)
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="CTF Challenge Directory Structure Creator")
-    parser.add_argument("-d", "--directory", required=True, help="Path to CTF directory (will be created if doesn't exist)")
-    parser.add_argument("-u", "--url", required=True, help="Base URL of CTFd instance")
+    parser = argparse.ArgumentParser(description="CTF Challenge Directory Manager")
+    parser.add_argument("-d", "--directory", required=True, help="Path to CTF directory")
     parser.add_argument("-t", "--token", required=True, help="API token for authentication")
+    parser.add_argument("-u", "--url", help="Base URL of CTFd instance (required for new config)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
-
+    
     args = parser.parse_args()
 
     try:
-        create_ctf_directory_structure(
-            base_url=args.url,
-            api_token=args.token,
-            ctf_dir=args.directory
-        )
+        if args.url:
+            # Create new config or overwrite existing
+            run_with_new_config(args.url, args.token, args.directory)
+        else:
+            # Use existing config
+            run_from_config(args.directory, args.token)
+        
+        print(f"\nOperation completed in: {os.path.abspath(args.directory)}")
     except Exception as e:
-        print(f"Fatal error: {e}")
+        print(f"Error: {e}")
         exit(1)
